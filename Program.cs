@@ -11,6 +11,7 @@ class Program
 {
     private static Dictionary<string, List<WebSocket>> channels = new();
     private static Dictionary<string, string> inviteKeys = new();
+    private static Dictionary<WebSocket, string> userNames = new(); // Mapping WebSocket to username
     private static Random random = new();
 
     static async Task Main()
@@ -43,10 +44,28 @@ class Program
         byte[] buffer = new byte[1024];
         await SendMessage(socket, "Welcome to the chat!\nCommands: 'create' to make a channel, 'join <invite-key>' to join one.");
 
+        // Receive username first
         WebSocketReceiveResult result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+        string initialMessage = Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+        // Handle username assignment
+        if (initialMessage.StartsWith("USERNAME:"))
+        {
+            string username = initialMessage.Substring(9); // Extract username
+            userNames[socket] = username;
+            Console.WriteLine($"[New Connection] Username assigned: {username}");
+        }
+        else
+        {
+            await SendMessage(socket, "[Error] Username required. Please send 'USERNAME:<your_username>'.");
+            return;
+        }
+
+        // Process command to create or join a channel
+        string channelId = null;
+        result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
         string command = Encoding.UTF8.GetString(buffer, 0, result.Count);
 
-        string channelId = null;
         if (command.StartsWith("create"))
         {
             channelId = Guid.NewGuid().ToString();
@@ -75,18 +94,22 @@ class Program
             return;
         }
 
+        // Handle messages while in the channel
         while (socket.State == WebSocketState.Open && channelId != null)
         {
             result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
             if (result.MessageType == WebSocketMessageType.Text)
             {
                 string message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                Console.WriteLine($"[Channel {channelId}] {message}");
+                string username = userNames[socket];  // Get the username for the current socket
+                string messageWithUsername = $"{username}: {message}";
+
+                Console.WriteLine($"[Channel {channelId}] {messageWithUsername}");
                 foreach (var client in channels[channelId])
                 {
                     if (client != socket && client.State == WebSocketState.Open)
                     {
-                        await SendMessage(client, message);
+                        await SendMessage(client, messageWithUsername);
                     }
                 }
             }
